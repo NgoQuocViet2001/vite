@@ -7,7 +7,6 @@ import {
 import type { RolldownOutput } from 'rolldown'
 import colors from 'picocolors'
 import getEtag from 'etag'
-import type { Update } from '#types/hmrPayload'
 import { ChunkMetadataMap, resolveRolldownOptions } from '../build'
 import { getHmrImplementation } from '../plugins/clientInjections'
 import {
@@ -65,10 +64,6 @@ export class BundledDev {
   private _devEngine!: DevEngine
   private initialBuildCompleted = false
   private clients = new Clients()
-  private invalidateCalledModules = new Map<
-    NormalizedHotChannelClient,
-    Set<string>
-  >()
   private debouncedFullReload = debounce(20, () => {
     this.environment.hot.send({ type: 'full-reload', path: '*' })
     this.environment.logger.info(colors.green(`page reload`), {
@@ -97,6 +92,9 @@ export class BundledDev {
     return this._devEngine
   }
 
+  /** payload filenames rendered but not yet delivered — delivery marks filter on it */
+  private pendingPayloadFilenames = new Set<string>()
+
   async listen(): Promise<void> {
     debug?.('INITIAL: setup bundle options')
     const rolldownOptions = await this.getRolldownOptions()
@@ -113,9 +111,11 @@ export class BundledDev {
         : rolldownOptions.output
     )!
 
-    this.environment.hot.on('vite:module-loaded', (payload, client) => {
+    this.environment.hot.on('vite:client-connected', (payload, client) => {
+      // identification only: bind the socket to a clientId and create the server-side
+      // session (fresh shipped[C] ledger) — execution state never travels upstream
       this.clients.setupIfNeeded(client, payload.clientId)
-      this.devEngine.registerModules(payload.clientId, payload.modules)
+      this.devEngine.registerClient(payload.clientId)
     })
     this.environment.hot.on('vite:client:connect', (_payload, client) => {
       // Replay the cached build error to freshly connected clients.
@@ -158,7 +158,6 @@ export class BundledDev {
         for (const { clientId, update } of updates) {
           const client = this.clients.get(clientId)
           if (client) {
-            this.invalidateCalledModules.get(client)?.clear()
             this.handleHmrOutput(client, changedFiles, update)
           }
         }
@@ -222,60 +221,6 @@ export class BundledDev {
     }
   }
 
-  async invalidateModule(
-    m: {
-      path: string
-      message?: string
-      firstInvalidatedBy: string
-    },
-    client: NormalizedHotChannelClient,
-  ): Promise<void> {
-    const invalidateCalledModules = this.invalidateCalledModules.get(client)
-    if (invalidateCalledModules?.has(m.path)) {
-      debug?.(
-        `INVALIDATE: invalidate received from ${m.path}, but ignored because it was already invalidated`,
-      )
-      return
-    }
-
-    debug?.(`INVALIDATE: invalidate received from ${m.path}, re-triggering HMR`)
-    if (!invalidateCalledModules) {
-      this.invalidateCalledModules.set(client, new Set([]))
-    }
-    this.invalidateCalledModules.get(client)!.add(m.path)
-
-    let update: BindingClientHmrUpdate['update'] | undefined
-    try {
-      const _update = await this.devEngine.invalidate(
-        m.path,
-        m.firstInvalidatedBy,
-      )
-      update = _update.find(
-        (u) => this.clients.get(u.clientId) === client,
-      )?.update
-    } catch (e) {
-      client.send({
-        type: 'error',
-        err: prepareError(e as Error),
-      })
-      return
-    }
-    if (!update) return
-
-    if (update.type === 'Patch') {
-      this.environment.logger.info(
-        colors.yellow(`hmr invalidate `) +
-          colors.dim(m.path) +
-          (m.message ? ` ${m.message}` : ''),
-        { timestamp: true },
-      )
-    }
-
-    this.handleHmrOutput(client, [m.path], update, {
-      firstInvalidatedBy: m.firstInvalidatedBy,
-    })
-  }
-
   async triggerBundleRegenerationIfStale(): Promise<boolean> {
     const bundleState = await this.devEngine.getBundleState()
 
@@ -311,14 +256,29 @@ export class BundledDev {
   async triggerLazyBundling(
     moduleId: string | null,
     clientId: string | null,
-  ): Promise<string | undefined> {
+  ): Promise<{ code: string; filename: string } | undefined> {
     if (!moduleId || !clientId) {
       return
     }
     debug?.(
       `TRIGGER-LAZY: trigger lazy bundling for module ${moduleId} for client ${clientId}`,
     )
-    return await this.devEngine.compileEntry(moduleId, clientId)
+    const result = await this.devEngine.compileEntry(moduleId, clientId)
+    this.pendingPayloadFilenames.add(result.filename)
+    return result
+  }
+
+  /**
+   * Delivery notification from the serving middleware: the response for a payload's
+   * filename completed. This is the ONLY writer of the server's `shipped[C]` ledger —
+   * a payload a tab never finished downloading is never recorded, which is what makes
+   * omission causally safe (a chunk omits a module only if the payload carrying it
+   * finished delivering first).
+   */
+  markPayloadDelivered(filename: string): void {
+    if (this.pendingPayloadFilenames.delete(filename)) {
+      void this.devEngine.notifyPayloadDelivered(filename)
+    }
   }
 
   async close(): Promise<void> {
@@ -411,7 +371,6 @@ export class BundledDev {
     client: NormalizedHotChannelClient,
     files: string[],
     hmrOutput: HmrOutput,
-    invalidateInformation?: { firstInvalidatedBy: string },
   ) {
     if (hmrOutput.type === 'Noop') return
 
@@ -424,18 +383,12 @@ export class BundledDev {
         : ''
       this.environment.logger.info(
         colors.green(`trigger page reload `) + colors.dim(shortFile) + reason,
-        { clear: !invalidateInformation, timestamp: true },
+        { clear: true, timestamp: true },
       )
-      if (invalidateInformation) {
-        // Invalidate does not get upgraded to `rebuild`,
-        // so `onOutput` will not be triggered and thus the reload needs to be triggered here.
-        this.devEngine.ensureLatestBuildOutput().then(async () => {
-          this.debouncedFullReload()
-        })
-      } else {
-        // Use a flag to defer the reload until the `onOutput` callback to avoid error lay flashes.
-        this.fullReloadPending = true
-      }
+      // `import.meta.hot.invalidate()` is fully client-side now, so every server-sent
+      // reload comes from a file change: defer it until the `onOutput` callback to
+      // avoid error overlay flashes.
+      this.fullReloadPending = true
       return
     }
 
@@ -444,6 +397,7 @@ export class BundledDev {
       code: typeof hmrOutput.code === 'string' ? '[code]' : hmrOutput.code,
     })
 
+    this.pendingPayloadFilenames.add(hmrOutput.filename)
     this.memoryFiles.set(hmrOutput.filename, {
       // ensure that the generated hmr patch contains ESM syntax
       // this is to avoid attacks like GHSA-4v9v-hfq4-rm2v
@@ -459,27 +413,22 @@ export class BundledDev {
         source: hmrOutput.sourcemap,
       })
     }
-    const updates: Update[] = hmrOutput.hmrBoundaries.map((boundary: any) => {
-      return {
-        type: 'js-update',
-        url: hmrOutput.filename,
-        path: boundary.boundary,
-        acceptedPath: boundary.acceptedVia,
-        firstInvalidatedBy: invalidateInformation?.firstInvalidatedBy,
-        timestamp: Date.now(),
-      }
-    })
+    // one push per patch — a pure announcement; boundaries are the browser's
+    // business now, decided by the client's own walk
     client.send({
-      type: 'update',
-      updates,
+      type: 'fbm-update',
+      changedIds: hmrOutput.changedIds,
+      url: hmrOutput.filename,
+      seq: hmrOutput.seq,
     })
-    const filePaths = [...new Set(updates.map((u) => u.path))]
-    const { formatted, truncated } = formatAndTruncateFileList(filePaths)
-    if (truncated) debugHmr?.(`hmr update ${filePaths.join(', ')}`)
+    const { formatted, truncated } = formatAndTruncateFileList(
+      hmrOutput.changedIds,
+    )
+    if (truncated) debugHmr?.(`hmr update ${hmrOutput.changedIds.join(', ')}`)
     this.environment.logger.info(
       colors.green(`hmr update `) + colors.dim(formatted),
       {
-        clear: !invalidateInformation,
+        clear: true,
         timestamp: true,
       },
     )

@@ -1,8 +1,3 @@
-import { nanoid } from 'nanoid/non-secure'
-import type {
-  DevRuntime as DevRuntimeType,
-  Messenger,
-} from 'rolldown/experimental/runtime-types'
 import type { ErrorPayload, HotPayload } from '#types/hmrPayload'
 import type { ViteHotContext } from '#types/hot'
 import { HMRClient, HMRContext } from '../shared/hmr'
@@ -12,6 +7,7 @@ import {
 } from '../shared/moduleRunnerTransport'
 import { createHMRHandler } from '../shared/hmrHandler'
 import { setupForwardConsoleHandler } from '../shared/forwardConsole'
+import type { FbmHMRClient } from './fbmHmrClient'
 import { ErrorOverlay, cspNonce, overlayId } from './overlay'
 // @ts-expect-error internal virtual module
 import '@vite/env'
@@ -28,7 +24,6 @@ declare const __HMR_TIMEOUT__: number
 declare const __HMR_ENABLE_OVERLAY__: boolean
 declare const __WS_TOKEN__: string
 declare const __SERVER_FORWARD_CONSOLE__: any
-declare const __BUNDLED_DEV__: boolean
 
 console.debug('[vite] connecting...')
 
@@ -39,17 +34,15 @@ const serverHost = __SERVER_HOST__
 const socketProtocol =
   __HMR_PROTOCOL__ || (importMetaUrl.protocol === 'https:' ? 'wss' : 'ws')
 const hmrPort = __HMR_PORT__
-const socketHost = `${__HMR_HOSTNAME__ || importMetaUrl.hostname}:${
-  hmrPort || importMetaUrl.port
-}${__HMR_BASE__}`
+const socketHost = `${__HMR_HOSTNAME__ || importMetaUrl.hostname}:${hmrPort || importMetaUrl.port
+  }${__HMR_BASE__}`
 const directSocketHost = __HMR_DIRECT_TARGET__
-const base = __BASE__ || '/'
+export const base = __BASE__ || '/'
 const hmrTimeout = __HMR_TIMEOUT__
 const wsToken = __WS_TOKEN__
-const isBundleMode = __BUNDLED_DEV__
 const forwardConsole = __SERVER_FORWARD_CONSOLE__
 
-const transport = normalizeModuleRunnerTransport(
+export const transport = normalizeModuleRunnerTransport(
   (() => {
     let wsTransport = createWebSocketModuleRunnerTransport({
       createConnection: () =>
@@ -91,10 +84,10 @@ const transport = normalizeModuleRunnerTransport(
                   currentScriptHostURL.pathname.replace(/@vite\/client$/, '')
                 console.error(
                   '[vite] failed to connect to websocket.\n' +
-                    'your current setup:\n' +
-                    `  (browser) ${currentScriptHost} <--[HTTP]--> ${serverHost} (server)\n` +
-                    `  (browser) ${socketHost} <--[WebSocket (failing)]--> ${directSocketHost} (server)\n` +
-                    'Check out your Vite / network configuration and https://vite.dev/config/server-options.html#server-hmr .',
+                  'your current setup:\n' +
+                  `  (browser) ${currentScriptHost} <--[HTTP]--> ${serverHost} (server)\n` +
+                  `  (browser) ${socketHost} <--[WebSocket (failing)]--> ${directSocketHost} (server)\n` +
+                  'Check out your Vite / network configuration and https://vite.dev/config/server-options.html#server-hmr .',
                 )
               }
             }
@@ -143,7 +136,7 @@ const debounceReload = (time: number) => {
     }, time)
   }
 }
-const pageReload = debounceReload(20)
+export const pageReload = debounceReload(20)
 
 const hmrClient = new HMRClient(
   {
@@ -151,79 +144,76 @@ const hmrClient = new HMRClient(
     debug: (...msg) => console.debug('[vite]', ...msg),
   },
   transport,
-  isBundleMode
-    ? async function importUpdatedModule({
-        url,
-        acceptedPath,
-        isWithinCircularImport,
-      }) {
-        const importPromise = import(base + url!).then(() =>
-          // @ts-expect-error globalThis.__rolldown_runtime__
-          globalThis.__rolldown_runtime__.loadExports(acceptedPath),
+  async function importUpdatedModule({
+    acceptedPath,
+    timestamp,
+    explicitImportRequired,
+    isWithinCircularImport,
+  }) {
+    const [acceptedPathWithoutQuery, query] = acceptedPath.split(`?`)
+    const importPromise = import(
+      /* @vite-ignore */
+      base +
+      acceptedPathWithoutQuery.slice(1) +
+      `?${explicitImportRequired ? 'import&' : ''}t=${timestamp}${query ? `&${query}` : ''
+      }`
+    )
+    if (isWithinCircularImport) {
+      importPromise.catch(() => {
+        console.info(
+          `[hmr] ${acceptedPath} failed to apply HMR as it's within a circular import. Reloading page to reset the execution order. ` +
+          `To debug and break the circular import, you can run \`vite --debug hmr\` to log the circular dependency path if a file change triggered it.`,
         )
-        if (isWithinCircularImport) {
-          importPromise.catch(() => {
-            console.info(
-              `[hmr] ${acceptedPath} failed to apply HMR as it's within a circular import. Reloading page to reset the execution order. ` +
-                `To debug and break the circular import, you can run \`vite --debug hmr\` to log the circular dependency path if a file change triggered it.`,
-            )
-            pageReload()
-          })
-        }
-        return await importPromise
-      }
-    : async function importUpdatedModule({
-        acceptedPath,
-        timestamp,
-        explicitImportRequired,
-        isWithinCircularImport,
-      }) {
-        const [acceptedPathWithoutQuery, query] = acceptedPath.split(`?`)
-        const importPromise = import(
-          /* @vite-ignore */
-          base +
-            acceptedPathWithoutQuery.slice(1) +
-            `?${explicitImportRequired ? 'import&' : ''}t=${timestamp}${
-              query ? `&${query}` : ''
-            }`
-        )
-        if (isWithinCircularImport) {
-          importPromise.catch(() => {
-            console.info(
-              `[hmr] ${acceptedPath} failed to apply HMR as it's within a circular import. Reloading page to reset the execution order. ` +
-                `To debug and break the circular import, you can run \`vite --debug hmr\` to log the circular dependency path if a file change triggered it.`,
-            )
-            pageReload()
-          })
-        }
-        return await importPromise
-      },
+        pageReload()
+      })
+    }
+    return await importPromise
+  },
 )
+// Registered by the full-bundle-mode entry (`fbmClient.ts`) when that entry is the one
+// served/inlined. When set, it is the client every payload notification goes to (FBM hot
+// contexts register there). In the plain client it stays undefined, and the `import type`
+// above keeps `FbmHMRClient` compile-time only — so `client.mjs` bundles no FBM code.
+let fbmClient: FbmHMRClient | undefined
+export function registerFbmClient(client: FbmHMRClient): void {
+  fbmClient = client
+}
 transport.connect!(createHMRHandler(handleMessage))
 
 setupForwardConsoleHandler(transport, forwardConsole)
 
+// if this is the first update and there's already an error overlay, it means the
+// page opened with existing server compile error and the whole module script failed
+// to load (since one of the nested imports is 500). in this case a normal update
+// won't work and a full reload is needed.
+export function clearOverlayOrReloadOnFirstUpdate(): 'reload' | 'continue' {
+  if (hasDocument) {
+    if (isFirstUpdate && hasErrorOverlay()) {
+      location.reload()
+      return 'reload'
+    }
+    if (enableOverlay) {
+      clearErrorOverlay()
+    }
+    isFirstUpdate = false
+  }
+  return 'continue'
+}
+
 async function handleMessage(payload: HotPayload) {
+  const activeHmrClient = fbmClient ?? hmrClient
   switch (payload.type) {
     case 'connected':
       console.debug(`[vite] connected.`)
       break
+    case 'fbm-update':
+      // full-bundle mode
+      fbmClient!.handlePush(payload)
+      break
     case 'update':
-      await hmrClient.notifyListeners('vite:beforeUpdate', payload)
-      if (hasDocument) {
-        // if this is the first update and there's already an error overlay, it
-        // means the page opened with existing server compile error and the whole
-        // module script failed to load (since one of the nested imports is 500).
-        // in this case a normal update won't work and a full reload is needed.
-        if (isFirstUpdate && hasErrorOverlay()) {
-          location.reload()
-          return
-        } else {
-          if (enableOverlay) {
-            clearErrorOverlay()
-          }
-          isFirstUpdate = false
-        }
+      await activeHmrClient.notifyListeners('vite:beforeUpdate', payload)
+      if (clearOverlayOrReloadOnFirstUpdate() === 'reload') {
+        return
       }
       await Promise.all(
         payload.updates.map(async (update): Promise<void> => {
@@ -249,9 +239,8 @@ async function handleMessage(payload: HotPayload) {
             return
           }
 
-          const newPath = `${base}${searchUrl.slice(1)}${
-            searchUrl.includes('?') ? '&' : '?'
-          }t=${timestamp}`
+          const newPath = `${base}${searchUrl.slice(1)}${searchUrl.includes('?') ? '&' : '?'
+            }t=${timestamp}`
 
           // rather than swapping the href on the existing tag, we will
           // create a new link tag. Once the new stylesheet has loaded we
@@ -273,10 +262,10 @@ async function handleMessage(payload: HotPayload) {
           })
         }),
       )
-      await hmrClient.notifyListeners('vite:afterUpdate', payload)
+      await activeHmrClient.notifyListeners('vite:afterUpdate', payload)
       break
     case 'custom': {
-      await hmrClient.notifyListeners(payload.event, payload.data)
+      await activeHmrClient.notifyListeners(payload.event, payload.data)
       if (payload.event === 'vite:ws:disconnect') {
         if (hasDocument && !willUnload) {
           console.log(`[vite] server connection lost. Polling for restart...`)
@@ -290,7 +279,7 @@ async function handleMessage(payload: HotPayload) {
       break
     }
     case 'full-reload':
-      await hmrClient.notifyListeners('vite:beforeFullReload', payload)
+      await activeHmrClient.notifyListeners('vite:beforeFullReload', payload)
       if (hasDocument) {
         if (payload.path && payload.path.endsWith('.html')) {
           // if html file is edited, only reload the page if the browser is
@@ -311,11 +300,11 @@ async function handleMessage(payload: HotPayload) {
       }
       break
     case 'prune':
-      await hmrClient.notifyListeners('vite:beforePrune', payload)
-      await hmrClient.prunePaths(payload.paths)
+      await activeHmrClient.notifyListeners('vite:beforePrune', payload)
+      await activeHmrClient.prunePaths(payload.paths)
       break
     case 'error': {
-      await hmrClient.notifyListeners('vite:error', payload)
+      await activeHmrClient.notifyListeners('vite:error', payload)
       if (hasDocument) {
         const err = payload.err
         if (enableOverlay) {
@@ -617,57 +606,8 @@ export function injectQuery(url: string, queryToInject: string): string {
   const pathname = url.replace(/[?#].*$/, '')
   const { search, hash } = new URL(url, 'http://vite.dev')
 
-  return `${pathname}?${queryToInject}${search ? `&` + search.slice(1) : ''}${
-    hash || ''
-  }`
+  return `${pathname}?${queryToInject}${search ? `&` + search.slice(1) : ''}${hash || ''
+    }`
 }
 
 export { ErrorOverlay }
-
-declare const DevRuntime: typeof DevRuntimeType
-
-if (isBundleMode && typeof DevRuntime !== 'undefined') {
-  class ViteDevRuntime extends DevRuntime {
-    override createModuleHotContext(moduleId: string) {
-      const ctx = createHotContext(moduleId)
-      // @ts-expect-error TODO: support CSS properly
-      ctx._internal = { updateStyle, removeStyle }
-      return ctx
-    }
-
-    override applyUpdates(_boundaries: [string, string][]): void {
-      // noop, handled in the HMR client
-    }
-  }
-
-  const clientId = nanoid()
-
-  // notify client id
-  transport.send({
-    type: 'custom',
-    event: 'vite:module-loaded',
-    data: { modules: [], clientId },
-  })
-
-  const wrappedSocket: Messenger = {
-    send(message) {
-      switch (message.type) {
-        case 'hmr:module-registered': {
-          transport.send({
-            type: 'custom',
-            event: 'vite:module-loaded',
-            // clone array as the runtime reuses the array instance
-            data: { modules: message.modules.slice(), clientId },
-          })
-          break
-        }
-        default:
-          throw new Error(`Unknown message type: ${JSON.stringify(message)}`)
-      }
-    },
-  }
-  ;(globalThis as any).__rolldown_runtime__ ??= new ViteDevRuntime(
-    wrappedSocket,
-    clientId,
-  )
-}

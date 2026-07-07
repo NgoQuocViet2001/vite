@@ -295,7 +295,8 @@ export class DevEnvironment extends BaseEnvironment {
     _client: NormalizedHotChannelClient,
   ): void {
     if (this.bundledDev) {
-      this.bundledDev.invalidateModule(m, _client)
+      // full-bundle mode handles `import.meta.hot.invalidate()` fully client-side —
+      // a re-walk on the browser's own graph; nothing arrives upstream
       return
     }
 

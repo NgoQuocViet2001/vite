@@ -26,12 +26,16 @@ export function triggerLazyBundlingMiddleware(
 
     const moduleId = params.get('id')
     const clientId = params.get('clientId')
-    const code = await bundledDev.triggerLazyBundling(moduleId, clientId)
-    if (code == null) {
+    const result = await bundledDev.triggerLazyBundling(moduleId, clientId)
+    if (result == null) {
       return next()
     }
 
     res!.setHeader('Content-Type', 'application/javascript')
-    return res!.end(code)
+    // the completed response is the delivery — only then does the shipped[C] ledger
+    // record this chunk's modules (concurrent lazy compiles therefore both carry
+    // shared factories: duplicate idempotent bytes, never a missing factory)
+    res!.on('finish', () => bundledDev.markPayloadDelivered(result.filename))
+    return res!.end(result.code)
   }
 }

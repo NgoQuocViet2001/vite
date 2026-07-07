@@ -4,6 +4,7 @@ export type HotPayload =
   | ConnectedPayload
   | PingPayload
   | UpdatePayload
+  | FbmUpdatePayload
   | FullReloadPayload
   | CustomPayload
   | ErrorPayload
@@ -22,14 +23,22 @@ export interface UpdatePayload {
   updates: Update[]
 }
 
+/**
+ * The full-bundle-mode push — a pure announcement. The client walks its own
+ * module graph from `changedIds` and decides boundaries, module cache removals, and re-runs itself;
+ * the patch behind `url` carries only graph rows and the factories this client lacks.
+ */
+export interface FbmUpdatePayload {
+  type: 'fbm-update'
+  changedIds: string[]
+  /** URL of the per-client HMR patch chunk */
+  url: string
+  /** Per-client sequence number */
+  seq: number
+}
+
 export interface Update {
   type: 'js-update' | 'css-update'
-  /**
-   * URL of HMR patch chunk
-   *
-   * This only exists when full-bundle mode is enabled.
-   */
-  url?: string
   path: string
   acceptedPath: string
   timestamp: number

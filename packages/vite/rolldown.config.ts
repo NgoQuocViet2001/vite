@@ -38,6 +38,23 @@ const clientConfig = defineConfig({
   },
 })
 
+// Full-bundle-mode client. A separate entry so the FBM HMR code is bundled only here and
+// never into `client.mjs` (served to every non-FBM dev page). It imports `./client` for
+// the shared boot, so the base client is duplicated into this artifact — harmless, since
+// only one of the two is ever loaded per page.
+const fbmClientConfig = defineConfig({
+  input: path.resolve(dirname, 'src/client/fbmClient.ts'),
+  platform: 'browser',
+  transform: {
+    target: 'es2020',
+  },
+  external: ['@vite/env'],
+  output: {
+    dir: path.resolve(dirname, 'dist'),
+    entryFileNames: 'client/fbmClient.mjs',
+  },
+})
+
 const sharedNodeOptions = defineConfig({
   platform: 'node',
   treeshake: {
@@ -155,6 +172,7 @@ const moduleRunnerConfig = defineConfig({
 export default defineConfig([
   envConfig,
   clientConfig,
+  fbmClientConfig,
   nodeConfig,
   moduleRunnerConfig,
 ])
