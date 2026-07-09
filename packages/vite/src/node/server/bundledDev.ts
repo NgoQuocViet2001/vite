@@ -77,6 +77,8 @@ export class BundledDev {
 
   memoryFiles: MemoryFiles = new MemoryFiles()
 
+  servedFallbackDuringInitialBuild = false
+
   constructor(private environment: DevEnvironment) {
     if (environment.name !== 'client') {
       throw new Error(
@@ -206,7 +208,9 @@ export class BundledDev {
     )
     this.waitForInitialBuildFinish().then(() => {
       debug?.('INITIAL: build done')
-      this.environment.hot.send({ type: 'full-reload', path: '*' })
+      if (this.servedFallbackDuringInitialBuild) {
+        this.environment.hot.send({ type: 'full-reload', path: '*' })
+      }
       this.initialBuildCompleted = true
     })
   }
@@ -334,12 +338,12 @@ export class BundledDev {
       if (!transform) continue
       const handler =
         typeof transform === 'function' ? transform : transform.handler
-      const wrappedHandler: typeof handler = function (this, code, id, opts) {
+      const wrappedHandler: typeof handler = function(this, code, id, opts) {
         if (id.includes('?rolldown-lazy=')) return null
         return handler.call(this, code, id, opts)
       }
       if (typeof transform === 'function') {
-        ;(plugin as any).transform = wrappedHandler
+        ; (plugin as any).transform = wrappedHandler
       } else {
         transform.handler = wrappedHandler
       }
