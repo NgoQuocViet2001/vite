@@ -71,8 +71,6 @@ export class BundledDev {
     })
   })
 
-  private fullReloadPending = false
-
   private lastBuildError: Error | null = null
 
   memoryFiles: MemoryFiles = new MemoryFiles()
@@ -173,7 +171,6 @@ export class BundledDev {
             },
           )
           this.lastBuildError = result
-          this.fullReloadPending = false
           this.environment.hot.send({
             type: 'error',
             err: prepareError(result),
@@ -183,12 +180,6 @@ export class BundledDev {
         this.lastBuildError = null
 
         this.storeOutputFiles(result.output)
-
-        // Trigger a full reload if there's no error in the result and a reload is pending from HMR.
-        if (this.fullReloadPending) {
-          this.fullReloadPending = false
-          this.debouncedFullReload()
-        }
       },
       onAdditionalAssets: (result) => {
         this.storeOutputFiles(result.output)
@@ -376,25 +367,13 @@ export class BundledDev {
     files: string[],
     hmrOutput: HmrOutput,
   ) {
-    if (hmrOutput.type === 'Noop') return
+    // Only patches reach the client: the server never decides reloads anymore,
+    // each tab's own walk chooses hot-apply / skip / self-reload.
+    if (hmrOutput.type !== 'Patch') return
 
     const shortFile = files
       .map((file) => getShortName(file, this.environment.config.root))
       .join(', ')
-    if (hmrOutput.type === 'FullReload') {
-      const reason = hmrOutput.reason
-        ? colors.dim(` (${hmrOutput.reason})`)
-        : ''
-      this.environment.logger.info(
-        colors.green(`trigger page reload `) + colors.dim(shortFile) + reason,
-        { clear: true, timestamp: true },
-      )
-      // `import.meta.hot.invalidate()` is fully client-side now, so every server-sent
-      // reload comes from a file change: defer it until the `onOutput` callback to
-      // avoid error overlay flashes.
-      this.fullReloadPending = true
-      return
-    }
 
     debug?.(`handle hmr output for ${shortFile}`, {
       ...hmrOutput,
