@@ -111,12 +111,27 @@ export class BundledDev {
         : rolldownOptions.output
     )!
 
-    this.environment.hot.on('vite:client-connected', (payload, client) => {
-      // identification only: bind the socket to a clientId and create the server-side
-      // session (fresh shipped[C] ledger) — execution state never travels upstream
-      this.clients.setupIfNeeded(client, payload.clientId)
-      this.devEngine.registerClient(payload.clientId)
-    })
+    this.environment.hot.on(
+      'vite:client-connected',
+      async (payload, client) => {
+        this.clients.setupIfNeeded(client, payload.clientId)
+        this.devEngine.registerClient(payload.clientId)
+
+        await this.devEngine.ensureCurrentBuildFinish()
+        const { hasStaleOutput } = await this.devEngine.getBundleState()
+
+        // reload if the file edits happened while connecting.
+        if (hasStaleOutput) {
+          debug?.(
+            `TRIGGER: client ${payload.clientId} connected after stale output, triggering full reload`,
+          )
+          client.send({
+            type: 'full-reload',
+            path: '*',
+          })
+        }
+      },
+    )
     this.environment.hot.on('vite:client:connect', (_payload, client) => {
       // Replay the cached build error to freshly connected clients.
       if (this.lastBuildError) {
@@ -329,12 +344,12 @@ export class BundledDev {
       if (!transform) continue
       const handler =
         typeof transform === 'function' ? transform : transform.handler
-      const wrappedHandler: typeof handler = function(this, code, id, opts) {
+      const wrappedHandler: typeof handler = function (this, code, id, opts) {
         if (id.includes('?rolldown-lazy=')) return null
         return handler.call(this, code, id, opts)
       }
       if (typeof transform === 'function') {
-        ; (plugin as any).transform = wrappedHandler
+        ;(plugin as any).transform = wrappedHandler
       } else {
         transform.handler = wrappedHandler
       }
