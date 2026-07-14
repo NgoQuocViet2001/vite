@@ -48,8 +48,6 @@ export function memoryFilesMiddleware(
         res.setHeader(name, headers[name]!)
       }
 
-      // the completed response is the delivery — only then does the shipped[C]
-      // ledger record this payload (a 304 means a previous 200 already recorded it)
       res.on('finish', () => bundledDev.markPayloadDelivered(filePath))
       return res.end(file.source)
     }

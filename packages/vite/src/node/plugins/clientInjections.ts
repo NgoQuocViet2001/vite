@@ -141,7 +141,6 @@ async function createClientConfigValueReplacer(
 export async function getHmrImplementation(
   config: ResolvedConfig,
 ): Promise<string> {
-  // FBM inlines the full-bundle-mode client (base client + FBM HMR) into the bundle.
   const content = fs.readFileSync(normalizedFbmClientEntry, 'utf-8')
   const replacer = await createClientConfigValueReplacer(config)
   return (

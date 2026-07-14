@@ -129,9 +129,6 @@ export const CLIENT_ENTRY: string = resolve(
   VITE_PACKAGE_DIR,
   'dist/client/client.mjs',
 )
-// Full-bundle-mode client: the base client plus the FBM HMR judgment. Inlined into the
-// bundle (via `getHmrImplementation`) only when `experimental.bundledDev` is enabled, so
-// the plain `client.mjs` served as `/@vite/client` stays free of FBM code.
 export const FBM_CLIENT_ENTRY: string = resolve(
   VITE_PACKAGE_DIR,
   'dist/client/fbmClient.mjs',

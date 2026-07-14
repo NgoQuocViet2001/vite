@@ -92,7 +92,6 @@ export class BundledDev {
     return this._devEngine
   }
 
-  /** payload filenames rendered but not yet delivered — delivery marks filter on it */
   private pendingPayloadFilenames = new Set<string>()
 
   async listen(): Promise<void> {
@@ -120,7 +119,6 @@ export class BundledDev {
         await this.devEngine.ensureCurrentBuildFinish()
         const { hasStaleOutput } = await this.devEngine.getBundleState()
 
-        // reload if the file edits happened while connecting.
         if (hasStaleOutput) {
           debug?.(
             `TRIGGER: client ${payload.clientId} connected after stale output, triggering full reload`,
@@ -279,11 +277,9 @@ export class BundledDev {
   }
 
   /**
-   * Delivery notification from the serving middleware: the response for a payload's
-   * filename completed. This is the ONLY writer of the server's `shipped[C]` ledger —
-   * a payload a tab never finished downloading is never recorded, which is what makes
-   * omission causally safe (a chunk omits a module only if the payload carrying it
-   * finished delivering first).
+   * Called by the serving middlewares when the response for a payload completed.
+   * Only delivered payloads are recorded on the server's per-client ship map, so
+   * later chunks may omit a module only if the payload carrying it was delivered.
    */
   markPayloadDelivered(filename: string): void {
     if (this.pendingPayloadFilenames.delete(filename)) {
@@ -382,8 +378,7 @@ export class BundledDev {
     files: string[],
     hmrOutput: HmrOutput,
   ) {
-    // Only patches reach the client: the server never decides reloads anymore,
-    // each tab's own walk chooses hot-apply / skip / self-reload.
+    // only patches are sent; each client decides full reloads from its own walk
     if (hmrOutput.type !== 'Patch') return
 
     const shortFile = files
@@ -411,8 +406,6 @@ export class BundledDev {
         source: hmrOutput.sourcemap,
       })
     }
-    // one push per patch — a pure announcement; boundaries are the browser's
-    // business now, decided by the client's own walk
     client.send({
       type: 'fbm-update',
       changedIds: hmrOutput.changedIds,

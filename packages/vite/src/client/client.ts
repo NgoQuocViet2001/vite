@@ -34,8 +34,9 @@ const serverHost = __SERVER_HOST__
 const socketProtocol =
   __HMR_PROTOCOL__ || (importMetaUrl.protocol === 'https:' ? 'wss' : 'ws')
 const hmrPort = __HMR_PORT__
-const socketHost = `${__HMR_HOSTNAME__ || importMetaUrl.hostname}:${hmrPort || importMetaUrl.port
-  }${__HMR_BASE__}`
+const socketHost = `${__HMR_HOSTNAME__ || importMetaUrl.hostname}:${
+  hmrPort || importMetaUrl.port
+}${__HMR_BASE__}`
 const directSocketHost = __HMR_DIRECT_TARGET__
 export const base = __BASE__ || '/'
 const hmrTimeout = __HMR_TIMEOUT__
@@ -84,10 +85,10 @@ export const transport = normalizeModuleRunnerTransport(
                   currentScriptHostURL.pathname.replace(/@vite\/client$/, '')
                 console.error(
                   '[vite] failed to connect to websocket.\n' +
-                  'your current setup:\n' +
-                  `  (browser) ${currentScriptHost} <--[HTTP]--> ${serverHost} (server)\n` +
-                  `  (browser) ${socketHost} <--[WebSocket (failing)]--> ${directSocketHost} (server)\n` +
-                  'Check out your Vite / network configuration and https://vite.dev/config/server-options.html#server-hmr .',
+                    'your current setup:\n' +
+                    `  (browser) ${currentScriptHost} <--[HTTP]--> ${serverHost} (server)\n` +
+                    `  (browser) ${socketHost} <--[WebSocket (failing)]--> ${directSocketHost} (server)\n` +
+                    'Check out your Vite / network configuration and https://vite.dev/config/server-options.html#server-hmr .',
                 )
               }
             }
@@ -154,15 +155,16 @@ const hmrClient = new HMRClient(
     const importPromise = import(
       /* @vite-ignore */
       base +
-      acceptedPathWithoutQuery.slice(1) +
-      `?${explicitImportRequired ? 'import&' : ''}t=${timestamp}${query ? `&${query}` : ''
-      }`
+        acceptedPathWithoutQuery.slice(1) +
+        `?${explicitImportRequired ? 'import&' : ''}t=${timestamp}${
+          query ? `&${query}` : ''
+        }`
     )
     if (isWithinCircularImport) {
       importPromise.catch(() => {
         console.info(
           `[hmr] ${acceptedPath} failed to apply HMR as it's within a circular import. Reloading page to reset the execution order. ` +
-          `To debug and break the circular import, you can run \`vite --debug hmr\` to log the circular dependency path if a file change triggered it.`,
+            `To debug and break the circular import, you can run \`vite --debug hmr\` to log the circular dependency path if a file change triggered it.`,
         )
         pageReload()
       })
@@ -170,10 +172,8 @@ const hmrClient = new HMRClient(
     return await importPromise
   },
 )
-// Registered by the full-bundle-mode entry (`fbmClient.ts`) when that entry is the one
-// served/inlined. When set, it is the client every payload notification goes to (FBM hot
-// contexts register there). In the plain client it stays undefined, and the `import type`
-// above keeps `FbmHMRClient` compile-time only — so `client.mjs` bundles no FBM code.
+// set by the full-bundle-mode entry (`fbmClient.ts`); the `import type` above keeps
+// `FbmHMRClient` compile-time only, so `client.mjs` bundles no FBM code
 let fbmClient: FbmHMRClient | undefined
 export function registerFbmClient(client: FbmHMRClient): void {
   fbmClient = client
@@ -207,7 +207,6 @@ async function handleMessage(payload: HotPayload) {
       console.debug(`[vite] connected.`)
       break
     case 'fbm-update':
-      // full-bundle mode
       fbmClient!.handlePush(payload)
       break
     case 'update':
@@ -239,8 +238,9 @@ async function handleMessage(payload: HotPayload) {
             return
           }
 
-          const newPath = `${base}${searchUrl.slice(1)}${searchUrl.includes('?') ? '&' : '?'
-            }t=${timestamp}`
+          const newPath = `${base}${searchUrl.slice(1)}${
+            searchUrl.includes('?') ? '&' : '?'
+          }t=${timestamp}`
 
           // rather than swapping the href on the existing tag, we will
           // create a new link tag. Once the new stylesheet has loaded we
@@ -606,8 +606,9 @@ export function injectQuery(url: string, queryToInject: string): string {
   const pathname = url.replace(/[?#].*$/, '')
   const { search, hash } = new URL(url, 'http://vite.dev')
 
-  return `${pathname}?${queryToInject}${search ? `&` + search.slice(1) : ''}${hash || ''
-    }`
+  return `${pathname}?${queryToInject}${search ? `&` + search.slice(1) : ''}${
+    hash || ''
+  }`
 }
 
 export { ErrorOverlay }

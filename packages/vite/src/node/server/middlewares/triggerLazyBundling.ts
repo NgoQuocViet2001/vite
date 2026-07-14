@@ -32,9 +32,6 @@ export function triggerLazyBundlingMiddleware(
     }
 
     res!.setHeader('Content-Type', 'application/javascript')
-    // the completed response is the delivery — only then does the shipped[C] ledger
-    // record this chunk's modules (concurrent lazy compiles therefore both carry
-    // shared factories: duplicate idempotent bytes, never a missing factory)
     res!.on('finish', () => bundledDev.markPayloadDelivered(result.filename))
     return res!.end(result.code)
   }

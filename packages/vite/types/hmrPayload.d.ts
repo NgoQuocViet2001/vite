@@ -24,9 +24,8 @@ export interface UpdatePayload {
 }
 
 /**
- * The full-bundle-mode push — a pure announcement. The client walks its own
- * module graph from `changedIds` and decides boundaries, module cache removals, and re-runs itself;
- * the patch behind `url` carries only graph rows and the factories this client lacks.
+ * Full-bundle-mode update notification. The client computes the HMR boundaries
+ * itself from `changedIds`.
  */
 export interface FbmUpdatePayload {
   type: 'fbm-update'

@@ -2,11 +2,7 @@ import type { FbmUpdatePayload, Update, UpdatePayload } from '#types/hmrPayload'
 import { HMRClient, HMRContext, type HMRLogger } from '../shared/hmr'
 import type { NormalizedModuleRunnerTransport } from '../shared/moduleRunnerTransport'
 
-/**
- * The store + executor half of `__rolldown_runtime__`. The client reads topology and
- * execution truth through this narrow surface and owns every HMR judgment itself; no
- * acceptance data ever crosses it in the other direction.
- */
+/** the subset of `__rolldown_runtime__` the HMR client uses */
 export interface RolldownRuntimeLike {
   getImporters(id: string): string[]
   isExecuted(id: string): boolean
@@ -20,30 +16,19 @@ type HmrUpdate =
   | { type: 'noop' }
   | { type: 'full-reload'; reason: string }
   | {
-    type: 'boundaries'
-    /** `[boundary, acceptedVia]` pairs — same shape the server used to compute */
-    boundaries: [string, string][]
-    updateSet: string[]
-  }
+      type: 'boundaries'
+      /** `[boundary, acceptedVia]` pairs */
+      boundaries: [string, string][]
+      updateSet: string[]
+    }
 
 export interface FbmHMRClientOptions {
   base: string
-  /**
-   * Runs after the walk finds boundaries and `vite:beforeUpdate` fired, before anything
-   * is fetched or evicted. Returning `'reload'` aborts the apply (the hook reloads the
-   * page itself) — the first-update-with-error-overlay dance lives in the caller.
-   */
+  /** returning `'reload'` aborts the apply — the hook reloads the page itself */
   beforeApply: () => 'reload' | 'continue'
   pageReload: () => void
 }
 
-/**
- * The dedicated full-bundle-mode HMR client: webpack's acceptance model, hosted on
- * Vite's client, sized by rolldown's static walk. Acceptance is recorded when
- * `accept()` executes (the inherited `hotModulesMap` — written by `HMRContext`), the
- * boundary walk runs here against the runtime's rows and registry, and updates apply
- * one at a time in push order.
- */
 export class FbmHMRClient extends HMRClient {
   private applyQueue = Promise.resolve()
   private lastSeq = 0
@@ -61,7 +46,6 @@ export class FbmHMRClient extends HMRClient {
     })
   }
 
-  // the two questions that used to be server-computed — now live map reads
   isSelfAccepted(id: string): boolean {
     return (
       this.hotModulesMap.get(id)?.callbacks.some((c) => c.deps.includes(id)) ??
@@ -86,7 +70,6 @@ export class FbmHMRClient extends HMRClient {
     const traversedModules = new Set<string>()
     for (const changed of changedIds) {
       if (!this.runtime.isExecuted(changed)) {
-        // this tab never ran it → nothing to update here
         continue
       }
       const fullReload = this.bubble(
@@ -161,9 +144,6 @@ export class FbmHMRClient extends HMRClient {
     this.applyQueue = this.applyQueue
       .then(() => this.applyPush(payload))
       .catch((err) => {
-        // Keep the apply queue alive on a rejected apply. The error already surfaced
-        // (an eval throw inside a factory is the app's own runtime error — never
-        // caught or classified here).
         this.warnFailedUpdate(err, payload.changedIds)
       })
   }
@@ -192,7 +172,6 @@ export class FbmHMRClient extends HMRClient {
     seq,
   }: FbmUpdatePayload): Promise<void> {
     if (seq !== this.lastSeq + 1) {
-      // deltas only mean something in ship order; a gap means the record is wrong
       this.requestFullReload(
         `hmr update sequence gap (expected ${this.lastSeq + 1}, got ${seq})`,
       )
@@ -234,8 +213,7 @@ export class FbmHMRClient extends HMRClient {
       return
     }
 
-    // No rebuild happened, so there is nothing to fetch: the walk runs on the current
-    // rows and the apply re-runs from resident factories or reloads.
+    // no rebuild happened, so there is no patch to fetch
     const update = this.computeHmrUpdate(importers, { firstInvalidatedBy })
     if (update.type === 'noop') return
     if (update.type === 'full-reload') {
@@ -264,7 +242,7 @@ export class FbmHMRClient extends HMRClient {
       }
     }
 
-    // old callbacks
+    // collect callbacks before the caches are removed
     const applies = update.boundaries.map(([boundary, acceptedVia]) => ({
       boundary,
       acceptedVia,
@@ -294,7 +272,8 @@ export class FbmHMRClient extends HMRClient {
         this.currentFirstInvalidatedBy = undefined
       }
       this.logger.debug(
-        `hot updated: ${boundary === acceptedVia ? boundary : `${acceptedVia} via ${boundary}`
+        `hot updated: ${
+          boundary === acceptedVia ? boundary : `${acceptedVia} via ${boundary}`
         }`,
       )
     }
@@ -304,8 +283,6 @@ export class FbmHMRClient extends HMRClient {
     boundaries: [string, string][],
     firstInvalidatedBy: string | undefined,
   ): UpdatePayload {
-    // the public `vite:beforeUpdate` / `vite:afterUpdate` surface still speaks
-    // per-boundary `Update`s — synthesized from the walk instead of server-sent
     const updates: Update[] = boundaries.map(([boundary, acceptedVia]) => ({
       type: 'js-update',
       path: boundary,
@@ -322,11 +299,6 @@ export class FbmHMRClient extends HMRClient {
   }
 }
 
-/**
- * The FBM hot context: identical surface to the shared one, except `invalidate` is
- * handled fully client-side — a re-walk from the invalidator's importers — instead of
- * a `vite:invalidate` round-trip.
- */
 export class FbmHMRContext extends HMRContext {
   constructor(
     private fbmClient: FbmHMRClient,
